@@ -138,6 +138,37 @@ function loadFile(file){
  reader.readAsText(file);
 }
 $("resetFile").onclick=()=>{currentFile=null;messages=[];scoring={};$("fileInput").value="";$("fileInfo").classList.add("hidden");$("analyzeBtn").disabled=true;$("analysisArea").classList.add("hidden");$("analyzeHint").textContent="Upload file terlebih dahulu."};
+function applyAIRecommendations(data){
+ const rows=Array.isArray(data?.hasil)?data.hasil:(Array.isArray(data?.results)?data.results:(Array.isArray(data?.penilaian)?data.penilaian:[]));
+ let applied=0;
+ const norm=s=>String(s||"").normalize("NFKD").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
+ rows.forEach(item=>{
+   const category=item.kategori||item.category||"";
+   const sub=item.sub||item.subkategori||item.subcategory||item.detail||"";
+   const evidence=String(item.bukti||item.evidence||"").trim();
+   const score=item.skor??item.score;
+   if(score===null||score===undefined||score===""||!evidence||/tidak ada bukti|tidak cukup bukti|tidak dapat dinilai/i.test(evidence)) return;
+   const numeric=Number(score);
+   if(![0,25,50,75,100].includes(numeric)) return;
+   let candidates=parsedRubric.filter(r=>norm(r.category)===norm(category));
+   if(sub){
+     const exact=candidates.filter(r=>norm(r.detail)===norm(sub));
+     if(exact.length===1) candidates=exact;
+     else return; // Ambiguous subcategory: do not guess.
+   }else if(candidates.length!==1){
+     return; // Multiple rows under this category: require an exact subcategory.
+   }
+   if(candidates.length!==1) return;
+   const row=candidates[0];
+   scoring[row.id]={...(scoring[row.id]||{level:null,evidence:"",note:""}),level:numeric,evidence,note:String(item.alasan||item.reason||item.saran||"Rekomendasi AI; reviewer wajib memverifikasi.")};
+   applied++;
+ });
+ if(applied){
+   renderMetrics();
+   updateScore();
+ }
+ return applied;
+}
 function renderAIResult(raw){
  const host=$("aiResult");
  let data=null;
@@ -156,6 +187,7 @@ function renderAIResult(raw){
  const findings=list(data.temuan_utama);
  const coaching=list(data.rekomendasi_coaching);
  const results=list(data.hasil||data.results||data.penilaian);
+ const appliedCount=applyAIRecommendations(data);
  const scoreText=x=>(x===null||x===undefined||x===""||!Number.isFinite(Number(x)))?"Tidak cukup bukti":`${Number(x)}/100`;
  const levelColor=x=>String(x||"").toLowerCase().includes("excellent")||String(x||"").toLowerCase()==="good"?"#167653":String(x||"").toLowerCase().includes("improvement")||String(x||"").toLowerCase()==="poor"?"#b42318":"#8a5a00";
  let html=`<div style="font-family:Inter,system-ui,sans-serif;color:#203451;white-space:normal;line-height:1.55">
@@ -197,7 +229,7 @@ function renderAIResult(raw){
  if(data.catatan_qc){
    html+=`<div style="padding:10px 12px;background:#fff8e8;border:1px solid #f2d9a4;border-radius:10px;margin-top:10px;font-size:12px"><strong>Catatan QC:</strong> ${esc(data.catatan_qc)}</div>`;
  }
- html+=`<div style="margin-top:10px;font-size:11px;color:#6b7b92">Hasil ini adalah rekomendasi AI. Reviewer wajib memeriksa kecocokan kutipan, kriteria matriks sumber, dan skor sebelum menetapkan penilaian final. Ketiadaan bukti tidak otomatis berarti skor 0 atau 100.</div></div>`;
+ html+=`<div style="margin-top:10px;padding:9px 11px;background:#f4f7fb;border-radius:8px;font-size:11px;color:#53657f">${appliedCount?`Rekomendasi dengan bukti yang cocok otomatis dimasukkan ke ${appliedCount} metrik scoring matrix. `:"Belum ada rekomendasi yang cocok persis dengan metrik scoring matrix, jadi belum ada skor yang diisikan otomatis. "}Reviewer tetap wajib memeriksa kecocokan kutipan, kriteria matriks sumber, dan skor sebelum menetapkan penilaian final. Kategori tanpa bukti tidak otomatis diberi skor 0 atau 100.</div></div>`;
  host.innerHTML=html;
 }
 
@@ -249,7 +281,7 @@ $("analyzeBtn").onclick=async()=>{
      body:JSON.stringify({
        type:"chat",
        rubric:rubricText,
-       transcript:`Nama agent: ${clean($("agentName").value)||"Tidak diisi"}\nSkenario: ${scenario}\n\nTRANSKRIP:\n${transcriptText}\n\nInstruksi penting: gunakan hanya kriteria matriks sumber yang diberikan dan bukti yang benar-benar tertulis di transkrip. Jangan mengarang kutipan atau kejadian. Untuk setiap kategori, keluarkan kategori, skor, level, bukti kutipan persis, alasan, dan saran. Skor yang sah hanya 100 (Excellent), 75 (Good), 50 (Fair), 25 (Need Improvement), 0 (Poor), atau null jika bukti tidak cukup/tidak relevan. JANGAN memberi skor 100 hanya karena tidak ada bukti pelanggaran; kriteria yang tidak tampak dalam transkrip harus null / "Tidak cukup bukti", bukan otomatis Excellent atau Poor. Jangan menilai follow-up, aftersales, atau tindakan yang tidak muncul dalam transkrip. Jika kutipan bukti tidak bisa diberikan, gunakan null untuk skor. Isi temuan_utama, rekomendasi_coaching, dan catatan_qc dengan poin nyata; jangan biarkan kosong jika ada temuan yang didukung bukti. Sajikan dalam Bahasa Indonesia yang terstruktur.`
+       transcript:`Nama agent: ${clean($("agentName").value)||"Tidak diisi"}\nSkenario: ${scenario}\n\nTRANSKRIP:\n${transcriptText}\n\nKeluarkan JSON dengan properti ringkasan, hasil (array), temuan_utama (array), rekomendasi_coaching (array), catatan_qc. Di dalam hasil, setiap item harus punya kategori dan sub yang disalin PERSIS dari label Kategori/Sub pada matriks yang diberikan, serta skor, level, bukti, alasan, saran. Nilai hanya metrik relevan yang memiliki bukti langsung; jangan mengarang kutipan atau kejadian. Skor sah: 100 (Excellent), 75 (Good), 50 (Fair), 25 (Need Improvement), 0 (Poor), atau null jika bukti tidak cukup/tidak relevan. JANGAN memberi skor 100 hanya karena tidak ada bukti pelanggaran. Kriteria yang tidak tampak harus null / "Tidak cukup bukti", bukan otomatis Excellent atau Poor. Jangan menilai follow-up, aftersales, atau tindakan yang tidak muncul dalam transkrip. Jika kutipan bukti tidak bisa diberikan, gunakan null untuk skor. Isi temuan_utama, rekomendasi_coaching, dan catatan_qc dengan temuan nyata yang didukung bukti. Sajikan dalam Bahasa Indonesia. Jangan keluarkan kategori gabungan; satu item hasil untuk satu metrik matriks.`
      })
    });
    const data=await response.json();
