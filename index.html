@@ -138,6 +138,69 @@ function loadFile(file){
  reader.readAsText(file);
 }
 $("resetFile").onclick=()=>{currentFile=null;messages=[];scoring={};$("fileInput").value="";$("fileInfo").classList.add("hidden");$("analyzeBtn").disabled=true;$("analysisArea").classList.add("hidden");$("analyzeHint").textContent="Upload file terlebih dahulu."};
+function renderAIResult(raw){
+ const host=$("aiResult");
+ let data=null;
+ try{
+   if(raw && typeof raw==="object") data=raw;
+   else {
+     const cleaned=String(raw||"").trim().replace(/^```(?:json)?\s*/i,"").replace(/\s*```$/,"");
+     data=JSON.parse(cleaned);
+   }
+ }catch(_){
+   host.textContent=String(raw||"Hasil AI kosong.");
+   return;
+ }
+ const esc=v=>escapeHtml(v===null||v===undefined?"":typeof v==="string"?v:JSON.stringify(v));
+ const list=v=>Array.isArray(v)?v.filter(x=>x!==null&&x!==undefined&&String(x).trim()!==""):[];
+ const findings=list(data.temuan_utama);
+ const coaching=list(data.rekomendasi_coaching);
+ const results=list(data.hasil||data.results||data.penilaian);
+ const scoreText=x=>(x===null||x===undefined||x===""||!Number.isFinite(Number(x)))?"Tidak cukup bukti":`${Number(x)}/100`;
+ const levelColor=x=>String(x||"").toLowerCase().includes("excellent")||String(x||"").toLowerCase()==="good"?"#167653":String(x||"").toLowerCase().includes("improvement")||String(x||"").toLowerCase()==="poor"?"#b42318":"#8a5a00";
+ let html=`<div style="font-family:Inter,system-ui,sans-serif;color:#203451;white-space:normal;line-height:1.55">
+ <div style="padding:12px 14px;background:#fff;border:1px solid #dce5f1;border-radius:10px;margin-bottom:10px">
+ <div style="font-size:14px;font-weight:750;margin-bottom:5px">Ringkasan percakapan</div>
+ <div style="font-size:12px">${esc(data.ringkasan||"AI tidak memberikan ringkasan.")}</div></div>`;
+ if(findings.length){
+   html+=`<div style="padding:12px 14px;background:#fff;border:1px solid #dce5f1;border-radius:10px;margin-bottom:10px"><div style="font-size:14px;font-weight:750;margin-bottom:5px">Temuan utama</div><ul style="margin:4px 0;padding-left:20px">${findings.map(x=>`<li style="margin:4px 0;font-size:12px">${esc(typeof x==="object"?(x.temuan||x.keterangan||x.detail||JSON.stringify(x)):x)}</li>`).join("")}</ul></div>`;
+ }
+ html+=`<div style="font-size:14px;font-weight:750;margin:12px 0 8px">Rekomendasi penilaian</div>`;
+ if(results.length){
+   html+=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:8px">`;
+   html+=results.map(r=>{
+     const category=r.kategori||r.category||"Kategori";
+     const level=r.level||"Tidak cukup bukti";
+     const evidence=r.bukti||r.evidence||"Tidak ada kutipan bukti yang disertakan.";
+     const reason=r.alasan||r.reason||"";
+     const advice=r.saran||r.saran_perbaikan||r.advice||"";
+     const score=r.skor??r.score??null;
+     const isMissing=score===null||score===undefined||score==="";
+     return `<div style="background:#fff;border:1px solid #dce5f1;border-radius:10px;padding:11px 12px">
+       <div style="font-weight:750;font-size:12px;margin-bottom:7px">${esc(category)}</div>
+       <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:8px">
+         <span style="font-size:12px;font-weight:750;color:${isMissing?'#8a5a00':levelColor(level)}">${esc(isMissing?'Tidak cukup bukti':level)}</span>
+         <span style="font-size:11px;padding:2px 7px;border-radius:99px;background:#eef3fa">${esc(scoreText(score))}</span>
+       </div>
+       <div style="font-size:11px;color:#63738a;font-weight:700">Bukti transkrip</div><div style="font-size:12px;margin:2px 0 7px">${esc(evidence)}</div>
+       ${reason?`<div style="font-size:11px;color:#63738a;font-weight:700">Alasan</div><div style="font-size:12px;margin:2px 0 7px">${esc(reason)}</div>`:""}
+       ${advice?`<div style="font-size:11px;color:#63738a;font-weight:700">Saran</div><div style="font-size:12px;margin-top:2px">${esc(advice)}</div>`:""}
+     </div>`;
+   }).join("");
+   html+="</div>";
+ }else{
+   html+=`<div style="font-size:12px;padding:12px;background:#fff;border:1px solid #dce5f1;border-radius:10px">Respons AI tidak berisi daftar hasil penilaian yang dapat ditampilkan.</div>`;
+ }
+ if(coaching.length){
+   html+=`<div style="padding:12px 14px;background:#fff;border:1px solid #dce5f1;border-radius:10px;margin-top:10px"><div style="font-size:14px;font-weight:750;margin-bottom:5px">Rekomendasi coaching</div><ul style="margin:4px 0;padding-left:20px">${coaching.map(x=>`<li style="margin:4px 0;font-size:12px">${esc(typeof x==="object"?(x.rekomendasi||x.saran||x.detail||JSON.stringify(x)):x)}</li>`).join("")}</ul></div>`;
+ }
+ if(data.catatan_qc){
+   html+=`<div style="padding:10px 12px;background:#fff8e8;border:1px solid #f2d9a4;border-radius:10px;margin-top:10px;font-size:12px"><strong>Catatan QC:</strong> ${esc(data.catatan_qc)}</div>`;
+ }
+ html+=`<div style="margin-top:10px;font-size:11px;color:#6b7b92">Hasil ini adalah rekomendasi AI. Reviewer wajib memeriksa kecocokan kutipan, kriteria matriks sumber, dan skor sebelum menetapkan penilaian final. Ketiadaan bukti tidak otomatis berarti skor 0 atau 100.</div></div>`;
+ host.innerHTML=html;
+}
+
 $("analyzeBtn").onclick=async()=>{
  if(!currentFile)return;
  scoring={}; parsedRubric.forEach(r=>scoring[r.id]={level:null,evidence:"",note:""});
@@ -186,7 +249,7 @@ $("analyzeBtn").onclick=async()=>{
      body:JSON.stringify({
        type:"chat",
        rubric:rubricText,
-       transcript:`Nama agent: ${clean($("agentName").value)||"Tidak diisi"}\nSkenario: ${scenario}\n\nTRANSKRIP:\n${transcriptText}\n\nInstruksi: evaluasi berdasarkan kriteria matriks yang diberikan. Jangan mengarang bukti. Untuk setiap kategori yang dapat dinilai, sebutkan kategori/subkategori, rekomendasi level dan skor (Excellent=100, Good=75, Fair=50, Need Improvement=25, Poor=0), bukti kutipan dari transkrip, dan alasan singkat. Jika bukti tidak cukup atau kategori tidak relevan, tulis "Tidak cukup bukti / tidak dinilai". Bedakan fakta dari inferensi. Berikan ringkasan kekuatan, area perbaikan, dan rekomendasi coaching. Sajikan hasil dalam Bahasa Indonesia yang terstruktur.`
+       transcript:`Nama agent: ${clean($("agentName").value)||"Tidak diisi"}\nSkenario: ${scenario}\n\nTRANSKRIP:\n${transcriptText}\n\nInstruksi penting: gunakan hanya kriteria matriks sumber yang diberikan dan bukti yang benar-benar tertulis di transkrip. Jangan mengarang kutipan atau kejadian. Untuk setiap kategori, keluarkan kategori, skor, level, bukti kutipan persis, alasan, dan saran. Skor yang sah hanya 100 (Excellent), 75 (Good), 50 (Fair), 25 (Need Improvement), 0 (Poor), atau null jika bukti tidak cukup/tidak relevan. JANGAN memberi skor 100 hanya karena tidak ada bukti pelanggaran; kriteria yang tidak tampak dalam transkrip harus null / "Tidak cukup bukti", bukan otomatis Excellent atau Poor. Jangan menilai follow-up, aftersales, atau tindakan yang tidak muncul dalam transkrip. Jika kutipan bukti tidak bisa diberikan, gunakan null untuk skor. Isi temuan_utama, rekomendasi_coaching, dan catatan_qc dengan poin nyata; jangan biarkan kosong jika ada temuan yang didukung bukti. Sajikan dalam Bahasa Indonesia yang terstruktur.`
      })
    });
    const data=await response.json();
@@ -199,7 +262,7 @@ $("analyzeBtn").onclick=async()=>{
      const cleaned=result.trim().replace(/^```(?:json)?\s*/i,"").replace(/\s*```$/,"");
      result=JSON.stringify(JSON.parse(cleaned),null,2);
    }catch(_){}
-   output.textContent=result;
+   renderAIResult(result);
    status.textContent="Selesai · HTTP "+response.status;
    hint.textContent="Analisis AI selesai. Periksa bukti dan rekomendasi sebelum menetapkan skor final.";
  }catch(err){
