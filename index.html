@@ -45,7 +45,15 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}.app{display:fle
           <div class="panel-head"><div><h2>Hasil evaluasi</h2><div class="muted small">Skor per metrik berdasarkan matriks QC</div></div><span class="pill">LANGKAH 2</span></div>
           <div class="score-summary"><div class="score-circle"><div><strong id="totalScore">—</strong><small>/100</small></div></div><div style="flex:1"><strong id="scoreLabel">Belum dinilai</strong><p class="muted small" id="scoreText">Pilih level penilaian pada setiap metrik untuk menghitung skor.</p><div class="progress"><span id="scoreBar" style="width:0%"></span></div></div></div>
           <div class="row" style="margin-top:18px"><button class="secondary" id="exportBtn">Ekspor hasil (.csv)</button><button class="secondary" id="printBtn">Cetak / Simpan PDF</button></div>
-          <div class="notice" style="margin-top:16px">Catatan: versi ini menyiapkan transkrip dan formulir scoring QC. Penilaian AI otomatis belum aktif; pilih level berdasarkan bukti percakapan. Jangan anggap skor kosong sebagai nilai 0.</div>
+          <div class="notice" style="margin-top:16px">Catatan: AI membantu membuat rekomendasi penilaian berdasarkan bukti transkrip dan matriks QC. Reviewer tetap perlu memeriksa hasilnya. Jangan anggap skor kosong sebagai nilai 0.</div>
+          <div id="aiPanel" class="callout" style="margin-top:14px">
+            <div class="row" style="justify-content:space-between">
+              <strong>Analisis AI</strong>
+              <span id="aiStatus" class="small">Belum dijalankan</span>
+            </div>
+            <p class="small" style="margin:8px 0">Klik tombol evaluasi untuk meminta AI menilai transkrip menggunakan matriks QC yang tersedia. Tetap verifikasi bukti dan skor sebelum dipakai untuk coaching.</p>
+            <pre id="aiResult" style="white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.6 ui-monospace,monospace;margin:8px 0 0">Hasil analisis AI akan tampil di sini.</pre>
+          </div>
         </div>
         <div class="panel">
           <div class="panel-head"><h2>Ringkasan QC</h2><span class="pill">LIVE</span></div>
@@ -76,7 +84,7 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}.app{display:fle
   <section id="settingsPage" class="hidden">
     <div class="panel"><div class="panel-head"><h2>Pengaturan QA</h2><span class="pill">MATRIX</span></div><p class="muted">Scoring mengikuti matriks “Instrument Scoring Outbound Sales - Matrix penilaian QC”. Level: Excellent (100), Good (75), Fair (50), Need Improvement (25), Poor (0). Nilai harus didukung bukti percakapan.</p><h3 class="section-title">Matriks penilaian sumber</h3><div class="tablewrap"><table class="matrix" id="rubricTable"></table></div></div>
   </section>
-  <div class="footer">Sales QA Studio · Prototype · File chat diproses di browser perangkat ini.</div>
+  <div class="footer">Sales QA Studio · Analisis AI menggunakan Worker Cloudflare; periksa hasil sebelum menetapkan skor final.</div>
 </main>
 </div>
 <script>
@@ -130,11 +138,50 @@ function loadFile(file){
  reader.readAsText(file);
 }
 $("resetFile").onclick=()=>{currentFile=null;messages=[];scoring={};$("fileInput").value="";$("fileInfo").classList.add("hidden");$("analyzeBtn").disabled=true;$("analysisArea").classList.add("hidden");$("analyzeHint").textContent="Upload file terlebih dahulu."};
-$("analyzeBtn").onclick=()=>{
+$("analyzeBtn").onclick=async()=>{
  if(!currentFile)return;
  scoring={}; parsedRubric.forEach(r=>scoring[r.id]={level:null,evidence:"",note:""});
- renderMetrics();renderTranscript();$("analysisArea").classList.remove("hidden");$("messageCount").textContent=messages.length+" PESAN";$("metricCount").textContent=parsedRubric.length+" METRIK";updateScore();
+ renderMetrics();renderTranscript();$("analysisArea").classList.remove("hidden");
+ $("messageCount").textContent=messages.length+" PESAN";$("metricCount").textContent=parsedRubric.length+" METRIK";updateScore();
  $("analysisArea").scrollIntoView({behavior:"smooth",block:"start"});
+ const btn=$("analyzeBtn"), hint=$("analyzeHint"), status=$("aiStatus"), output=$("aiResult");
+ btn.disabled=true;btn.textContent="Sedang menganalisis…";hint.textContent="Mengirim transkrip ke AI Cloudflare.";status.textContent="Sedang diproses…";output.textContent="AI sedang menganalisis percakapan. Tunggu sebentar.";
+ try{
+   const rubricText=parsedRubric.map(r=>{
+     const keys=Object.keys(r.raw);
+     const criteria=keys.slice(2,7).map(k=>`${k}: ${clean(r.raw[k])}`).filter(x=>!x.endsWith(":")).join("\n");
+     return `Kategori: ${r.category}\nSub: ${r.detail||"-"}\nKriteria sumber:\n${criteria}`;
+   }).join("\n\n---\n\n");
+   const transcriptText=messages.map(m=>`${m.time ? "["+m.time+"] " : ""}${m.sender}: ${m.text}`).join("\n");
+   const response=await fetch("https://twilight-leaf-765dsales-qa-ai.fahmifaizal01.workers.dev/analyze",{
+     method:"POST",
+     headers:{"Content-Type":"application/json"},
+     body:JSON.stringify({
+       type:"chat",
+       rubric:rubricText,
+       transcript:`Nama agent: ${clean($("agentName").value)||"Tidak diisi"}\nSkenario: ${$("scenario").value}\n\nTRANSKRIP:\n${transcriptText}\n\nInstruksi: evaluasi berdasarkan kriteria matriks yang diberikan. Jangan mengarang bukti. Untuk setiap kategori yang dapat dinilai, sebutkan kategori/subkategori, rekomendasi level dan skor (Excellent=100, Good=75, Fair=50, Need Improvement=25, Poor=0), bukti kutipan dari transkrip, dan alasan singkat. Jika bukti tidak cukup atau kategori tidak relevan, tulis "Tidak cukup bukti / tidak dinilai". Bedakan fakta dari inferensi. Berikan ringkasan kekuatan, area perbaikan, dan rekomendasi coaching. Sajikan hasil dalam Bahasa Indonesia yang terstruktur.`
+     })
+   });
+   const data=await response.json();
+   if(!response.ok || data.ok===false) throw new Error(data.error||`Permintaan gagal (HTTP ${response.status}).`);
+   let result=data.result;
+   if(result && typeof result==="object") result=JSON.stringify(result,null,2);
+   if(typeof result!=="string" || !result.trim()) result=JSON.stringify(data,null,2);
+   // If the model returned JSON text, format it for readability.
+   try{
+     const cleaned=result.trim().replace(/^```(?:json)?\s*/i,"").replace(/\s*```$/,"");
+     result=JSON.stringify(JSON.parse(cleaned),null,2);
+   }catch(_){}
+   output.textContent=result;
+   status.textContent="Selesai · HTTP "+response.status;
+   hint.textContent="Analisis AI selesai. Periksa bukti dan rekomendasi sebelum menetapkan skor final.";
+ }catch(err){
+   output.textContent="Analisis AI belum berhasil.\n\n"+(err?.message||String(err))+"\n\nPeriksa koneksi internet dan pastikan Worker AI sudah di-deploy.";
+   status.textContent="Gagal";
+   hint.textContent="Analisis AI gagal. Coba lagi setelah memeriksa pesan error.";
+ }finally{
+   btn.disabled=false;btn.textContent="Jalankan ulang analisis AI ↻";
+ }
 };
 function renderMetrics(){
  const filter=$("metricFilter").value.toLowerCase();const host=$("metricList");host.innerHTML="";
