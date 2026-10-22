@@ -147,19 +147,46 @@ $("analyzeBtn").onclick=async()=>{
  const btn=$("analyzeBtn"), hint=$("analyzeHint"), status=$("aiStatus"), output=$("aiResult");
  btn.disabled=true;btn.textContent="Sedang menganalisis…";hint.textContent="Mengirim transkrip ke AI Cloudflare.";status.textContent="Sedang diproses…";output.textContent="AI sedang menganalisis percakapan. Tunggu sebentar.";
  try{
-   const rubricText=parsedRubric.map(r=>{
+   const scenario=$("scenario").value;
+   // Kirim hanya kriteria relevan untuk skenario terpilih agar input tidak melebihi batas model.
+   const generalCats=["Opening","Building Rapport","Handling Objection","Follow up","Bussiness Alignment","Complience","Closing"];
+   const scenarioAliases={
+     "New User":["New User"],
+     "Extend":["Extend"],
+     "Renewal (call)":["Renewal (call)","Renewal"],
+     "Renewal (chat)":["Renewal (chat)","Renewal"],
+     "Upsell":["Upsell"],
+     "Paid":["Paid"],
+     "Ressurection":["Ressurection"],
+     "Handling Objection":["Handling Objection"],
+     "User no respon":["Handling Objection\ncase: user no respon","Follow up"]
+   };
+   const wanted=scenarioAliases[scenario]||[scenario];
+   const relevant=parsedRubric.filter(r=>{
+     const cat=clean(r.category), sub=clean(r.detail);
+     if(generalCats.includes(cat)) return true;
+     if(cat==="Probing" || cat==="Presentation") return wanted.some(w=>sub.toLowerCase().includes(w.toLowerCase())||w.toLowerCase().includes(sub.toLowerCase()));
+     return wanted.some(w=>sub.toLowerCase().includes(w.toLowerCase()));
+   });
+   const rubricText=relevant.map(r=>{
      const keys=Object.keys(r.raw);
-     const criteria=keys.slice(2,7).map(k=>`${k}: ${clean(r.raw[k])}`).filter(x=>!x.endsWith(":")).join("\n");
-     return `Kategori: ${r.category}\nSub: ${r.detail||"-"}\nKriteria sumber:\n${criteria}`;
-   }).join("\n\n---\n\n");
-   const transcriptText=messages.map(m=>`${m.time ? "["+m.time+"] " : ""}${m.sender}: ${m.text}`).join("\n");
+     const criteria=keys.slice(2,7).map(k=>{
+       const value=clean(r.raw[k]);
+       if(!value) return "";
+       const compact=value.length>420?value.slice(0,420)+"… [dipersingkat]":value;
+       return `${k}: ${compact}`;
+     }).filter(Boolean).join("\n");
+     return `Kategori: ${r.category}\nSub: ${r.detail||"-"}\n${criteria}`;
+   }).join("\n\n---\n\n").slice(0,11500);
+   const fullTranscript=messages.map(m=>`${m.time ? "["+m.time+"] " : ""}${m.sender}: ${m.text}`).join("\n");
+   const transcriptText=fullTranscript.length>10000?fullTranscript.slice(0,10000)+"\n[Transkrip dipotong agar sesuai batas panjang; evaluasi hanya bagian yang terkirim.]":fullTranscript;
    const response=await fetch("https://twilight-leaf-765dsales-qa-ai.fahmifaizal01.workers.dev/analyze",{
      method:"POST",
      headers:{"Content-Type":"application/json"},
      body:JSON.stringify({
        type:"chat",
        rubric:rubricText,
-       transcript:`Nama agent: ${clean($("agentName").value)||"Tidak diisi"}\nSkenario: ${$("scenario").value}\n\nTRANSKRIP:\n${transcriptText}\n\nInstruksi: evaluasi berdasarkan kriteria matriks yang diberikan. Jangan mengarang bukti. Untuk setiap kategori yang dapat dinilai, sebutkan kategori/subkategori, rekomendasi level dan skor (Excellent=100, Good=75, Fair=50, Need Improvement=25, Poor=0), bukti kutipan dari transkrip, dan alasan singkat. Jika bukti tidak cukup atau kategori tidak relevan, tulis "Tidak cukup bukti / tidak dinilai". Bedakan fakta dari inferensi. Berikan ringkasan kekuatan, area perbaikan, dan rekomendasi coaching. Sajikan hasil dalam Bahasa Indonesia yang terstruktur.`
+       transcript:`Nama agent: ${clean($("agentName").value)||"Tidak diisi"}\nSkenario: ${scenario}\n\nTRANSKRIP:\n${transcriptText}\n\nInstruksi: evaluasi berdasarkan kriteria matriks yang diberikan. Jangan mengarang bukti. Untuk setiap kategori yang dapat dinilai, sebutkan kategori/subkategori, rekomendasi level dan skor (Excellent=100, Good=75, Fair=50, Need Improvement=25, Poor=0), bukti kutipan dari transkrip, dan alasan singkat. Jika bukti tidak cukup atau kategori tidak relevan, tulis "Tidak cukup bukti / tidak dinilai". Bedakan fakta dari inferensi. Berikan ringkasan kekuatan, area perbaikan, dan rekomendasi coaching. Sajikan hasil dalam Bahasa Indonesia yang terstruktur.`
      })
    });
    const data=await response.json();
